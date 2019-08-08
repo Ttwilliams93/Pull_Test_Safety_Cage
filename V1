@@ -1,0 +1,175 @@
+// SafetyCage Code
+//Troy Williams
+//8-8-2019
+//Include Necessary Libaries
+#include <Controllino.h>
+
+//Define Necessary Variables
+volatile long CurrentEncoder = 0;
+long PreviousEncoderCheck;
+int OPSStatus;
+int SetupSpeed = 1200;
+int MoveUp = LOW;
+int MoveDown = HIGH;
+int PulseWidthMicros = 10;
+long StepCount;
+long CurrentTime;
+long PreviousEncoder;
+int OperationSpeed = 450;
+long CurrentPosition;
+long PreviousEncoderTimeCheck = 0;
+long PreviousStepTime;
+int SSStatus;
+int LastSSStatus;
+long LastDebounceTime;
+int DebounceDelay = 50;
+long CurrentStateLength = 4200;
+//Define Necessary Pins
+
+//Motor Setup
+int MotorDirectionPin = CONTROLLINO_D4;
+int MotorStepPin = CONTROLLINO_D5;
+int MotorEnablePin = CONTROLLINO_D3;
+
+//Proximity Switches
+int OpenedProximitySensor = CONTROLLINO_A2;
+int SetupSwitch = CONTROLLINO_A3;
+//Acceleration Items
+float vo = 0;     //starting velocity, steps/s
+float v = 6000;   //steps/sec
+float a = 7500;  //steps/sec^2
+float F = 1000000; //sampling rate in HZ, 1MHz (micros())
+float S;          //Acceleration Length
+float P1;         //Step0 timing delay
+float Ps;         //Top Speed step speed
+float R;          //Acceleration constant
+float P;          //Step Delay for acceleration
+unsigned long LastStepTime; //Records last step time
+
+//Encoder Setup
+// Red - 24V // Black - GND
+const int encoder_a = CONTROLLINO_IN0;// Green - pin IN0 - Digital 4.7K PULLUP RESISTORS
+const int encoder_b = CONTROLLINO_IN1; // White - pin IN1 - Digital 4.7K PULLL UP RESISTORS
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(MotorDirectionPin, OUTPUT);
+  pinMode(MotorStepPin, OUTPUT);
+  pinMode(MotorEnablePin, OUTPUT);
+  pinMode(OpenedProximitySensor, INPUT);
+  pinMode(SetupSwitch, INPUT);
+  pinMode(encoder_a, INPUT);
+  pinMode(encoder_b, INPUT);
+  attachInterrupt(digitalPinToInterrupt(encoder_a), encoderPinChangeA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoder_b), encoderPinChangeB, CHANGE); \
+  digitalWrite(MotorEnablePin, HIGH);
+  FindOpenPosition();  // FINDS OPEN POSITION BASED OFF OF THE PROXIMITY SENSOR AT TOP OF RAIL
+}
+
+void loop() {
+
+  CurrentTime = micros();
+  if (digitalRead(SetupSwitch) == HIGH) {
+    delay(30);
+    while (digitalRead(SetupSwitch) == HIGH) {
+      delay(30);
+      MoveGuard(OperationSpeed, MoveUp);
+    }
+    PreviousEncoder = CurrentEncoder;
+  }
+
+  if (abs(CurrentTime - PreviousEncoderTimeCheck) >= 10000) {
+    if ((CurrentEncoder - PreviousEncoder) > 4) {
+      MoveGuard(OperationSpeed, MoveDown);
+      Serial.println("Closing");
+    }
+    if ((PreviousEncoder - CurrentEncoder) > 4 ) {
+      MoveGuard(OperationSpeed, MoveUp);
+      Serial.println("Opening");
+    }
+    PreviousEncoder = CurrentEncoder;
+    PreviousEncoderTimeCheck = micros();
+  }
+}
+
+void FindOpenPosition() {  //FINDS PROXIMITY SENSOR AT THE TOP OF THE RAIL ON START UP.
+  while (digitalRead(OpenedProximitySensor) == HIGH) {
+    CurrentTime = micros();
+    GeneralTakeStep(SetupSpeed, MoveUp);
+  }
+  StepCount = 0;
+  CurrentPosition = 0;
+}
+
+
+void MoveGuard(int MotorDelay, int Direction) {
+  digitalWrite(MotorDirectionPin, Direction);
+  S = (pow(v, 2) - pow(vo, 2)) / (2 * a);
+  P1 = F / sqrt((pow(vo, 2) + 2 * a));
+  Ps = F / v;
+  R = a / pow(F, 2);
+  P = P1;
+  StepCount = 0;
+  delay(10);
+  Serial.println("MoveGuard");
+  if (Direction == LOW) {
+    Serial.println("MoveGuardUp");
+    while (CurrentPosition > 0) {
+      AccelerationMove(Direction);
+    }
+  }
+  if (Direction == HIGH) {
+    Serial.println("MoveGuardDown");
+    while (CurrentPosition < CurrentStateLength) {
+      AccelerationMove(Direction);
+    }
+  }
+}
+
+void AccelerationMove(int Direction) {
+  if (P < (micros() - LastStepTime) && StepCount < CurrentStateLength  ) {
+    TakeStep();
+    LastStepTime = micros();
+    if (StepCount < S && StepCount < (CurrentStateLength / 2) ) {
+      P = P * (1 + ((-R) * P * P));
+    }
+    if ( (CurrentStateLength - StepCount) < S && StepCount > (CurrentStateLength / 2)) {
+      P = P * (1 + ((R) * P * P));
+    }
+    if (P < Ps) {
+      P = Ps;
+    }
+    StepCount = StepCount + 1;
+    if (Direction == HIGH) {
+      CurrentPosition = CurrentPosition + 1;
+    }
+    if (Direction == LOW) {
+      CurrentPosition = CurrentPosition - 1;
+    }
+  }
+}
+
+void TakeStep() {
+  digitalWrite(MotorStepPin, HIGH);
+  digitalWrite(MotorStepPin, LOW);
+}
+
+void GeneralTakeStep(int MotorDelay, int Direction) {
+  digitalWrite(MotorDirectionPin, Direction);
+  if (abs(CurrentTime - PreviousStepTime) >= MotorDelay) {
+    digitalWrite(MotorStepPin, HIGH);
+    delayMicroseconds(PulseWidthMicros); //Send StepSignal
+    digitalWrite(MotorStepPin, LOW);
+    PreviousStepTime = micros();
+    StepCount = StepCount + 1;
+  }
+}
+
+void encoderPinChangeA() {
+  CurrentEncoder += digitalRead(encoder_a) == digitalRead(encoder_b) ? 1 : -1;
+
+}
+
+void encoderPinChangeB() {
+  CurrentEncoder += digitalRead(encoder_a) != digitalRead(encoder_b) ? 1 : -1;
+}
